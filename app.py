@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, session, redirect, url_for
+from flask import Flask, render_template, request, session, redirect, url_for, jsonify
 import numpy as np
 import tensorflow as tf
 from PIL import Image
@@ -7,7 +7,13 @@ import os
 app = Flask(__name__)
 app.secret_key = "asl_secret_key"
 
-# Load model
+# CRITICAL FIXES FOR RENDER - Add these lines
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max file size
+app.config['SESSION_TYPE'] = 'filesystem'
+app.config['SESSION_PERMANENT'] = False
+app.config['SESSION_USE_SIGNER'] = True
+
+# Load model with error handling
 try:
     model = tf.keras.models.load_model("asl_model.h5")
     print("✅ Model loaded successfully!")
@@ -34,105 +40,92 @@ def home():
 
     if request.method == 'POST':
         action = request.form.get("action")
-        print(f"\n🔵 Action received: {action}")
-        print(f"🔵 Session before: word='{session.get('word')}', prediction={session.get('last_prediction')}")
+        print(f"🔵 Action received: {action}")
+        
+        # Check if this is an AJAX request (coming from your JavaScript)
+        is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
 
         # Clear word
         if action == "clear":
-            print("🔵 Clearing word")
             session["word"] = ""
             session["last_prediction"] = None
             session["last_confidence"] = None
-            print(f"✅ Session after clear: word='{session.get('word')}'")
+            if is_ajax:
+                return jsonify({'success': True, 'word': ''})
             return redirect(url_for("home"))
 
         # Add to word using stored prediction
         if action == "add":
             letter = session.get("last_prediction")
             print(f"🔵 Adding letter: {letter}")
-            
+
             if letter:
                 if letter == "SPACE":
                     session["word"] += " "
-                    print("✅ Added SPACE")
                 elif letter == "DEL":
                     session["word"] = session["word"][:-1]
-                    print("✅ Deleted last character")
                 elif letter != "NOTHING":
                     session["word"] += letter
-                    print(f"✅ Added letter: {letter}")
-                else:
-                    print("ℹ️ NOTHING detected - no action")
-            else:
-                print("⚠️ No letter to add")
-            
-            print(f"✅ Word now: '{session['word']}'")
+
+            if is_ajax:
+                return jsonify({
+                    'success': True, 
+                    'word': session["word"],
+                    'letter': letter
+                })
             return redirect(url_for("home"))
 
-        # Predict action
+        # Predict action - THIS IS THE CRITICAL PART
         if action == "predict":
             file = request.files.get('image')
             print(f"🔵 File received: {file.filename if file else 'NO FILE'}")
-            
-            if file:
+
+            if file and model is not None:
                 try:
-                    # Check file size
-                    file.seek(0, os.SEEK_END)
-                    file_length = file.tell()
-                    file.seek(0)
-                    print(f"📁 File size: {file_length} bytes")
-                    
-                    # Open and preprocess image
-                    print("🖼️ Opening image...")
+                    # Process image
                     img = Image.open(file).convert('RGB')
-                    print(f"✅ Image opened: {img.size}, mode: {img.mode}")
-                    
                     img = img.resize((64, 64))
-                    print(f"✅ Image resized to: {img.size}")
-                    
                     img_array = np.array(img) / 255.0
                     img_array = np.expand_dims(img_array, axis=0)
-                    print(f"✅ Image array shape: {img_array.shape}, min: {img_array.min()}, max: {img_array.max()}")
-                    
+
                     # Predict
-                    print("🤖 Running prediction...")
                     pred = model.predict(img_array, verbose=0)
-                    print(f"✅ Prediction raw output shape: {pred.shape}")
-                    
                     predicted_class = int(np.argmax(pred))
                     confidence = float(np.max(pred))
-                    
-                    print(f"📊 Predicted class index: {predicted_class}")
-                    print(f"📊 Top 5 predictions:")
-                    top5 = np.argsort(pred[0])[-5:][::-1]
-                    for i, idx in enumerate(top5):
-                        print(f"   {i+1}. {class_labels[idx]}: {pred[0][idx]:.4f}")
-                    
+
                     letter = class_labels[predicted_class]
                     confidence_percent = f"{confidence*100:.1f}%"
                     
-                    print(f"🎯 FINAL PREDICTION: {letter} with confidence {confidence_percent}")
-                    
+                    print(f"✅ Prediction: {letter} with confidence {confidence_percent}")
+
                     # Store in session
                     session["last_prediction"] = letter
                     session["last_confidence"] = confidence
-                    print(f"✅ Session updated: prediction={letter}, confidence={confidence}")
+
+                    # FOR AJAX REQUESTS - Return JSON
+                    if is_ajax:
+                        return jsonify({
+                            'success': True,
+                            'prediction': letter,
+                            'confidence': confidence_percent,
+                            'word': session.get("word", "")
+                        })
                     
                 except Exception as e:
-                    print(f"❌❌❌ ERROR during prediction: {str(e)}")
-                    import traceback
-                    traceback.print_exc()
-            else:
-                print("⚠️ No file uploaded")
-            
-            print(f"🔄 Redirecting to home")
+                    print(f"❌ Prediction error: {e}")
+                    if is_ajax:
+                        return jsonify({
+                            'success': False,
+                            'error': str(e)
+                        }), 500
+
+            # For non-AJAX requests or errors, redirect
             return redirect(url_for("home"))
 
-    # For GET requests, render template
+    # For GET requests
     confidence_display = None
     if session.get("last_confidence"):
         confidence_display = f"{session['last_confidence']*100:.1f}%"
-        print(f"📤 Rendering with prediction: {session.get('last_prediction')}, confidence: {confidence_display}")
     
     return render_template(
         'index.html',
@@ -142,6 +135,6 @@ def home():
     )
 
 if __name__ == '__main__':
+    # Important for Render - bind to 0.0.0.0 and use PORT env variable
     port = int(os.environ.get('PORT', 5000))
-    print(f"🚀 Starting app on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
