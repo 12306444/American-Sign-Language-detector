@@ -1075,7 +1075,15 @@
                         </div>
                         <p style="margin-top: 2rem; color: var(--gray); font-size: 0.95rem; max-width: 600px; text-align: center;">
                             <i class="fas fa-info-circle" style="color: var(--primary);"></i> 
-                            We're implementing data augmentation techniques to make the model more robust.
+                            We're implementing data augmentation to make the model robust for real-time camera input.
+
+Unlike static images, live camera feed must handle:
+• Rotation: ±15° for different hand angles
+• Brightness: 0.7x - 1.3x for lighting variations
+• Scale: 0.8x - 1.2x for hand distance changes
+• Shear: ±0.1 for perspective shifts
+
+These augmentations ensure accurate prediction regardless of environment. Currently training on augmented samples - expected completion Q2 2026.
                         </p>
                     </div>
                 </div>
@@ -1401,7 +1409,7 @@
             const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
             
             // Path for images in templates/asl_images/ folder
-            const basePath = 'asl_images/';
+            const basePath = '/static/asl_images/'
             
             letters.forEach(letter => {
                 const card = document.createElement('div');
